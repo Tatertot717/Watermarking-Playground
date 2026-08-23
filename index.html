@@ -1,19 +1,168 @@
-<!doctype html>
-<html>
-	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width" />
-		<title>My static Space</title>
-		<link rel="stylesheet" href="style.css" />
-	</head>
-	<body>
-		<div class="card">
-			<h1>Welcome to your static Space!</h1>
-			<p>You can modify this app directly by editing <i>index.html</i> in the Files and versions tab.</p>
-			<p>
-				Also don't forget to check the
-				<a href="https://huggingface.co/docs/hub/spaces" target="_blank">Spaces documentation</a>.
-			</p>
-		</div>
-	</body>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM Watermarking Playground</title>
+  <meta name="description" content="Interactive in-browser demo of LLM watermarking: the green/red-list watermark from Kirchenbauer et al. (2023) and tournament sampling from SynthID-Text (Dathathri et al., 2024)." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css?v=7" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🖋️</text></svg>" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <h1>LLM <span class="grad">Watermarking</span> Playground</h1>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- ═══════════ Controls ═══════════ -->
+    <section class="card controls">
+      <div class="field">
+        <label for="model">Model</label>
+        <select id="model">
+          <option value="HuggingFaceTB/SmolLM2-135M-Instruct">SmolLM2-135M-Instruct (~120 MB)</option>
+          <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2-360M-Instruct (~280 MB)</option>
+          <option value="onnx-community/Qwen3-0.6B-ONNX" selected>Qwen3-0.6B (~500 MB)</option>
+          <option value="onnx-community/Qwen3-4B-ONNX">Qwen3-4B (~2.8 GB)</option>
+        </select>
+        <div class="model-status">
+          <span id="status-text">Initialising…</span>
+          <span id="backend-badge" class="backend-badge" hidden></span>
+        </div>
+        <div class="progress" id="progress" hidden><div class="progress-fill" id="progress-fill"></div></div>
+      </div>
+
+      <div class="field">
+        <label for="prompt">Prompt</label>
+        <textarea id="prompt" rows="3" spellcheck="false">Write a short story about a lighthouse keeper.</textarea>
+        <div class="segmented" role="radiogroup" aria-label="Prompt style">
+          <label><input type="radio" name="promptStyle" value="chat" checked /><span>Instruction</span></label>
+          <label><input type="radio" name="promptStyle" value="raw" /><span>Continuation</span></label>
+        </div>
+        <span class="tip seg-tip" tabindex="0" data-tip="Instruction wraps the prompt in the model's chat template (ask it to do something); Continuation feeds it as raw text and the model continues it.">?</span>
+      </div>
+
+      <div class="field">
+        <label>Watermarking mode</label>
+        <div class="segmented" role="radiogroup" aria-label="Watermarking mode">
+          <label><input type="radio" name="wmMode" value="none" checked /><span>None</span></label>
+          <label><input type="radio" name="wmMode" value="hard" /><span>Hard</span></label>
+          <label><input type="radio" name="wmMode" value="soft" /><span>Soft</span></label>
+          <label><input type="radio" name="wmMode" value="tournament" /><span>Tournament</span></label>
+        </div>
+      </div>
+
+      <details class="params">
+        <summary>Generation parameters</summary>
+        <div class="param-grid">
+          <div class="param" data-param="maxTokens">
+            <label for="maxTokens">Tokens <span class="tip" tabindex="0" data-tip="max new tokens to generate">?</span></label>
+            <input type="number" id="maxTokens" min="1" max="512" step="1" value="200" />
+          </div>
+          <div class="param" data-param="temperature">
+            <label for="temperature">Temperature <span class="tip" tabindex="0" data-tip="0 = greedy decoding">?</span></label>
+            <input type="number" id="temperature" min="0" max="2" step="0.1" value="1.0" />
+          </div>
+          <div class="param" data-param="topK">
+            <label for="topK">top-k <span class="tip" tabindex="0" data-tip="keep only the k most likely tokens · 0 = off">?</span></label>
+            <input type="number" id="topK" min="0" max="1000" step="1" value="0" />
+          </div>
+          <div class="param" data-param="topP">
+            <label for="topP">top-p <span class="tip" tabindex="0" data-tip="nucleus sampling · 1 = off · applied after the watermark">?</span></label>
+            <input type="number" id="topP" min="0.05" max="1" step="0.05" value="1" />
+          </div>
+          <div class="param" data-param="seed">
+            <label for="seed">Seed <span class="tip" tabindex="0" data-tip="random seed for the sampling draws only (the watermark itself depends just on the key and context): same seed + same settings reproduce a run · leave empty for random">?</span></label>
+            <input type="number" id="seed" min="0" max="2147483647" step="1" value="42" placeholder="random" />
+          </div>
+        </div>
+      </details>
+
+      <details class="params" open data-param="wmSection">
+        <summary>Watermarking parameters</summary>
+        <div class="param-grid">
+          <div class="param" data-param="gamma">
+            <label for="gamma">γ fraction <span class="tip" tabindex="0" data-tip="green fraction: share of the vocab that is green">?</span></label>
+            <input type="number" id="gamma" min="0.05" max="0.95" step="0.05" value="0.5" />
+          </div>
+          <div class="param" data-param="delta">
+            <label for="delta">δ bias <span class="tip" tabindex="0" data-tip="logit bias added to green tokens before softmax">?</span></label>
+            <input type="number" id="delta" min="0" max="15" step="0.5" value="4.0" />
+          </div>
+          <div class="param" data-param="layers">
+            <label for="layers">m layers <span class="tip" tabindex="0" data-tip="tournament layers: equivalent to a knockout among 2^m sampled candidates, computed in closed form">?</span></label>
+            <input type="number" id="layers" min="1" max="30" step="1" value="15" />
+          </div>
+          <div class="param" data-param="ctxWidth">
+            <label for="ctxWidth">h context <span class="tip" tabindex="0" data-tip="context width: prior tokens seeding the PRNG">?</span></label>
+            <input type="number" id="ctxWidth" min="1" max="8" step="1" value="1" />
+          </div>
+          <div class="param" data-param="wmKey">
+            <label for="wmKey">key <span class="tip" tabindex="0" data-tip="secret key: shared secret mixed into the hash">?</span></label>
+            <input type="text" id="wmKey" value="ai_wrote_this" spellcheck="false" />
+          </div>
+        </div>
+        <div class="field" id="redwords-field" data-param="redWords">
+          <label for="redWords">Force onto the red list <span class="optional">(optional, comma-separated)</span> <span class="tip" tabindex="0" data-tip="These words are always red (green/red split) or always get g = 0 and lose every match (tournament). Put the 'obvious' continuation here and watch the model route around it.">?</span></label>
+          <input type="text" id="redWords" placeholder="e.g. Paris, lighthouse, fire" spellcheck="false" />
+        </div>
+      </details>
+
+      <div class="actions">
+        <button id="generate-btn" class="btn primary" disabled>Generate</button>
+        <button id="stop-btn" class="btn ghost" hidden>Stop</button>
+      </div>
+    </section>
+
+    <!-- ═══════════ Output ═══════════ -->
+    <section class="card output-card">
+      <div class="output-head">
+        <h2>Output</h2>
+        <div class="legend" id="legend" hidden>
+          <span class="legend-item"><span class="swatch green"></span><span id="legend-hi">green list</span></span>
+          <span class="legend-item"><span class="swatch red"></span><span id="legend-lo">red list</span></span>
+        </div>
+      </div>
+
+      <div class="output" id="output"><span class="placeholder" id="output-placeholder">Generated text will appear here.</span><span class="prompt-echo" id="prompt-echo"></span><span class="tokens" id="tokens"></span></div>
+    </section>
+
+    <!-- ═══════════ Detection ═══════════ -->
+    <section class="card detect-card">
+      <div class="output-head">
+        <h2>Detection <span class="tip" tabindex="0" data-tip="The detector tests for the scheme of the selected mode (green/red list for None/Hard/Soft, g-values for Tournament) using the parameters shown, the key and the red-list words.">?</span></h2>
+      </div>
+
+      <div class="detect-key">
+        <label for="detectKey">Detector key <span class="tip" tabindex="0" data-tip="Must match the secret key used at generation time, or the detector re-derives the wrong green/red lists (or g-values).">?</span></label>
+        <input type="text" id="detectKey" value="ai_wrote_this" spellcheck="false" />
+      </div>
+
+      <div class="detect-row">
+        <button id="detect-btn" class="btn secondary" disabled>🔍 Detect watermark</button>
+      </div>
+
+      <div class="verdict" id="verdict" hidden>
+        <div class="verdict-head">
+          <span class="verdict-label" id="verdict-label"></span>
+          <span class="verdict-conf" id="verdict-conf"></span>
+        </div>
+        <div class="meter"><div class="meter-fill" id="meter-fill"></div></div>
+        <dl class="stats">
+          <div><dt>detector</dt><dd id="stat-scheme"></dd></div>
+          <div><dt id="stat-first-label">green tokens</dt><dd id="stat-green"></dd></div>
+          <div><dt>z-score</dt><dd id="stat-z"></dd></div>
+          <div><dt>p-value</dt><dd id="stat-p"></dd></div>
+        </dl>
+        <p class="hint" id="verdict-note"></p>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="main.js?v=8"></script>
+</body>
 </html>
