@@ -1,6 +1,12 @@
 /**
  * Web worker: loads the model with transformers.js and runs watermarked
  * generation + detection off the main thread.
+ *
+ * One worker == one load attempt. main.js terminates this worker and spawns a
+ * fresh one for every model switch or failed load: ONNX Runtime's WASM instance
+ * cannot recover from an abort (e.g. out of memory), and transformers.js caches
+ * its first session-creation promise — even a rejected one — for the lifetime
+ * of the module, so a poisoned worker would fail every later load too.
  */
 import {
   AutoTokenizer,
@@ -9,23 +15,49 @@ import {
   LogitsProcessor,
   LogitsProcessorList,
   InterruptableStoppingCriteria,
+  env,
 } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2";
 import { seedFromContext, isGreen, detect, keyToSeed, tournamentSample, detectTournament, sampleMultinomial, seededRng } from "./watermark.js?v=8";
+import { APP_VERSION, WEBGPU_ONLY, modelInfo, dtypeFor, sizeMB, formatMB, classifyError, describeAdapter, createLog } from "./models.js?v=1";
 
 let tokenizer = null;
 let model = null;
-let loadedModelId = null;
-let device = null;
+let modelId = null; // model this worker is loading / has loaded
+let device = null; // "webgpu" | "wasm" once chosen
+let dtype = null;
+// starting → backend → download → compile → ready ⇄ generate / detect
+let phase = "starting";
 
 // Last generation, kept so the detector can run on it with (possibly edited) params.
 let lastGen = null; // { ids: number[], promptLen: number }
 
+const log = createLog(60);
 const stoppingCriteria = new InterruptableStoppingCriteria();
-
-/** Models whose q4 weights exceed what the 32-bit WASM backend can hold. */
-const WEBGPU_ONLY = new Set(["onnx-community/Qwen3-1.7B-ONNX", "onnx-community/Qwen3-4B-ONNX"]);
-
 const post = (msg) => self.postMessage(msg);
+
+function setPhase(p) {
+  if (phase === p) return;
+  phase = p;
+  log.push("phase", p);
+  post({ type: "phase", phase: p });
+}
+
+/** Report a failure in a structured way; main.js turns it into a human message + diagnostics. */
+function fail(failedPhase, err) {
+  const c = classifyError(err, device);
+  log.push("error", { phase: failedPhase, kind: c.kind, raw: c.raw.slice(0, 300) });
+  post({ type: "error", phase: failedPhase, kind: c.kind, raw: c.raw, name: c.name, stack: c.stack, modelId, device, dtype, log: log.entries() });
+}
+
+// Crashes outside the try/catch blocks below (e.g. inside ONNX Runtime callbacks) still reach main.js.
+self.addEventListener("error", (e) => {
+  e.preventDefault();
+  fail(phase, e.error ?? e.message);
+});
+self.addEventListener("unhandledrejection", (e) => {
+  e.preventDefault();
+  fail(phase, e.reason);
+});
 
 /**
  * Applies the Kirchenbauer watermark and temperature scaling to the raw
@@ -152,63 +184,122 @@ class WatermarkProcessor extends LogitsProcessor {
   }
 }
 
-async function pickDevice(forced) {
-  if (forced === "wasm" || forced === "webgpu") return forced;
-  try {
-    if (self.navigator?.gpu && (await self.navigator.gpu.requestAdapter())) return "webgpu";
-  } catch { /* fall through */ }
-  return "wasm";
-}
-
-async function loadModel(modelId, forcedDevice) {
-  if (loadedModelId === modelId && model) {
-    post({ type: "ready", device, modelId });
-    return;
+/**
+ * Decide the backend. WebGPU only if the adapter is real (not a software fallback) and a
+ * device can actually be created — `requestAdapter()` succeeding is not enough on some
+ * browsers. Never falls back when the device is forced via ?device=.
+ * Returns { device, f16, note, adapter }.
+ */
+async function pickBackend(forced) {
+  const out = { device: "wasm", f16: false, note: "", adapter: null };
+  if (forced === "wasm") {
+    out.note = "WASM forced via ?device=wasm";
+    return out;
+  }
+  if (!self.navigator?.gpu) {
+    if (forced === "webgpu") {
+      throw Object.assign(new Error("WebGPU forced via ?device=webgpu, but navigator.gpu is not available in a worker in this browser."), { kind: "webgpu" });
+    }
+    out.note = "navigator.gpu is not available in this worker → WASM";
+    return out;
   }
   try {
-    if (model) {
-      try { await model.dispose(); } catch { /* best effort */ }
-      model = null;
-      tokenizer = null;
-      lastGen = null;
+    const adapter = await self.navigator.gpu.requestAdapter();
+    if (!adapter) throw new Error("requestAdapter() returned null (WebGPU disabled or GPU blocklisted)");
+    out.adapter = describeAdapter(adapter);
+    out.f16 = out.adapter.shaderF16;
+    if (out.adapter.isFallbackAdapter && forced !== "webgpu") {
+      throw new Error("only a software (fallback) WebGPU adapter is available");
     }
-    device = await pickDevice(forcedDevice);
+    const dev = await adapter.requestDevice();
+    dev.destroy?.(); // ONNX Runtime requests its own device
+    out.device = "webgpu";
+    if (!out.f16) out.note = "adapter lacks shader-f16 → q4 (fp32 activations) instead of q4f16";
+    return out;
+  } catch (e) {
+    if (forced === "webgpu") {
+      throw Object.assign(new Error(`WebGPU forced via ?device=webgpu, but it is not usable here: ${e?.message ?? e}`), { kind: "webgpu" });
+    }
+    out.device = "wasm";
+    out.note = `WebGPU unavailable (${e?.message ?? e}) → WASM`;
+    return out;
+  }
+}
+
+async function loadModel(msg) {
+  modelId = msg.modelId;
+  const info = modelInfo(modelId);
+  try {
+    setPhase("backend");
+    const backend = await pickBackend(msg.device);
+    device = backend.device;
+    dtype = dtypeFor(device, backend.f16, msg.dtype);
+    log.push("backend", { device, dtype, note: backend.note, adapter: backend.adapter });
+    post({
+      type: "backend",
+      device,
+      dtype,
+      f16: backend.f16,
+      note: backend.note,
+      adapter: backend.adapter,
+      transformers: env.version,
+      wasm: { numThreads: env.backends?.onnx?.wasm?.numThreads, proxy: env.backends?.onnx?.wasm?.proxy },
+    });
+
     if (device !== "webgpu" && WEBGPU_ONLY.has(modelId)) {
-      throw new Error(
-        `${modelId} needs WebGPU: its 4-bit weights are >2 GB on the WASM backend, beyond the 32-bit memory limit. ` +
-        "Use a Chromium-based browser with WebGPU enabled, or pick a smaller model."
+      throw Object.assign(
+        new Error(
+          `${info.name} needs WebGPU: its ${formatMB(sizeMB(modelId, "q4f16"))} of 4-bit weights exceed what the 32-bit WASM backend can hold. ` +
+            "Use a browser with WebGPU (Chrome/Edge, Safari 26+, recent Firefox) or pick a smaller model."
+        ),
+        { kind: "unsupported" }
       );
     }
-    const dtype = device === "webgpu" ? "q4f16" : "q4";
-    post({ type: "status", text: `Loading ${modelId} (${device}, ${dtype})…` });
 
+    const size = sizeMB(modelId, dtype);
+    post({ type: "status", text: `Loading ${info.name} (${device}, ${dtype}${size ? `, ~${formatMB(size)}` : ""})…` });
+
+    setPhase("download");
     tokenizer = await AutoTokenizer.from_pretrained(modelId);
+    log.push("tokenizer");
+
     // Weight files may be split: model.onnx + model.onnx_data, model.onnx_data_1, …
     const isWeightFile = (f) => /\.onnx(_data(_\d+)?)?$/.test(f ?? "");
-    const files = new Map(); // file -> { loaded, total }
+    const files = new Map(); // file -> { loaded, total, done }
     let downloading = false;
     model = await AutoModelForCausalLM.from_pretrained(modelId, {
       device,
       dtype,
       progress_callback: (p) => {
         if (!isWeightFile(p.file)) return;
-        if (p.status === "progress") {
+        const name = p.file.split("/").pop();
+        if (p.status === "initiate") {
+          files.set(p.file, { loaded: 0, total: 0, done: false });
+          log.push("file", { name, status: "initiate" });
+          setPhase("download");
+        } else if (p.status === "progress") {
           downloading = true;
-          files.set(p.file, { loaded: p.loaded ?? 0, total: p.total ?? 0 });
+          files.set(p.file, { loaded: p.loaded ?? 0, total: p.total ?? 0, done: false });
           let loaded = 0, total = 0;
           for (const f of files.values()) { loaded += f.loaded; total += f.total; }
           post({ type: "progress", files: files.size, progress: total ? (100 * loaded) / total : 0, loaded, total });
-        } else if (p.status === "done" && downloading) {
-          post({ type: "status", text: `Downloaded ${p.file.split("/").pop()} — compiling model (can take a minute)…` });
+        } else if (p.status === "done") {
+          const f = files.get(p.file) ?? { loaded: 0, total: 0 };
+          f.done = true;
+          files.set(p.file, f);
+          log.push("file", { name, status: "done", mb: Math.round(Math.max(f.total, f.loaded) / 1e6), cached: !downloading });
+          if ([...files.values()].every((x) => x.done)) {
+            // All weight files are on disk: ONNX Runtime now parses the model inside WASM memory.
+            setPhase("compile");
+            post({ type: "status", text: `${downloading ? `Downloaded ${name} — c` : "C"}ompiling model (can take a minute)…` });
+          }
         }
       },
     });
-    loadedModelId = modelId;
-    post({ type: "ready", device, modelId });
+    setPhase("ready");
+    post({ type: "ready", device, dtype, modelId, log: log.entries() });
   } catch (err) {
-    loadedModelId = null;
-    model = null;
-    post({ type: "error", message: `Failed to load model: ${err.message ?? err}` });
+    fail(phase, err);
   }
 }
 
@@ -242,9 +333,10 @@ function stripTrailingSpecial(ids) {
 
 async function generate(p) {
   if (!model || !tokenizer) {
-    post({ type: "error", message: "Model not loaded yet." });
+    post({ type: "error", phase: "generate", kind: "other", raw: "Model not loaded yet.", modelId, device, dtype, log: log.entries() });
     return;
   }
+  setPhase("generate");
   try {
     const forcedRed = buildForcedRedSet(p.redWords);
 
@@ -316,61 +408,70 @@ async function generate(p) {
       interrupted: stoppingCriteria.interrupted,
     });
   } catch (err) {
-    post({ type: "error", message: `Generation failed: ${err.message ?? err}` });
+    fail("generate", err);
+  } finally {
+    setPhase("ready");
   }
 }
 
 function runDetect(p) {
   if (!lastGen) {
-    post({ type: "error", message: "Nothing to detect yet. Generate some text first." });
+    post({ type: "error", phase: "detect", kind: "other", raw: "Nothing to detect yet. Generate some text first.", modelId, device, dtype, log: log.entries() });
     return;
   }
-  const forcedRed = buildForcedRedSet(p.redWords);
-  if (p.scheme === "tournament") {
-    const r = detectTournament(lastGen.ids, lastGen.promptLen, {
-      m: p.m,
+  setPhase("detect");
+  try {
+    const forcedRed = buildForcedRedSet(p.redWords);
+    if (p.scheme === "tournament") {
+      const r = detectTournament(lastGen.ids, lastGen.promptLen, {
+        m: p.m,
+        h: p.h,
+        forcedRed,
+        keySeed: keyToSeed(p.key),
+      });
+      post({
+        type: "detected",
+        scheme: "tournament",
+        flags: r.flags,
+        perTokenScore: r.perTokenScore,
+        meanG: r.meanG,
+        T: r.T,
+        m: r.m,
+        h: p.h,
+        z: r.z,
+        pValue: r.pValue,
+      });
+      return;
+    }
+    const result = detect(lastGen.ids, lastGen.promptLen, {
+      gamma: p.gamma,
       h: p.h,
       forcedRed,
       keySeed: keyToSeed(p.key),
     });
     post({
       type: "detected",
-      scheme: "tournament",
-      flags: r.flags,
-      perTokenScore: r.perTokenScore,
-      meanG: r.meanG,
-      T: r.T,
-      m: r.m,
+      scheme: "greenlist",
+      flags: result.flags,
+      greenCount: result.greenCount,
+      T: result.T,
+      z: result.z,
+      pValue: result.pValue,
+      gamma: p.gamma,
       h: p.h,
-      z: r.z,
-      pValue: r.pValue,
     });
-    return;
+  } catch (err) {
+    fail("detect", err);
+  } finally {
+    setPhase("ready");
   }
-  const result = detect(lastGen.ids, lastGen.promptLen, {
-    gamma: p.gamma,
-    h: p.h,
-    forcedRed,
-    keySeed: keyToSeed(p.key),
-  });
-  post({
-    type: "detected",
-    scheme: "greenlist",
-    flags: result.flags,
-    greenCount: result.greenCount,
-    T: result.T,
-    z: result.z,
-    pValue: result.pValue,
-    gamma: p.gamma,
-    h: p.h,
-  });
 }
 
 self.onmessage = async (e) => {
   const msg = e.data;
   switch (msg.type) {
     case "load":
-      await loadModel(msg.modelId, msg.device);
+      await loadModel(msg);
       break;
     case "generate":
       await generate(msg.params);
@@ -383,3 +484,6 @@ self.onmessage = async (e) => {
       break;
   }
 };
+
+log.push("hello", { app: APP_VERSION, transformers: env.version });
+post({ type: "hello", app: APP_VERSION, transformers: env.version, webgpuApi: !!self.navigator?.gpu });

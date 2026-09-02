@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=7" />
+  <link rel="stylesheet" href="style.css?v=8" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🖋️</text></svg>" />
 </head>
 <body>
@@ -24,16 +24,22 @@
       <div class="field">
         <label for="model">Model</label>
         <select id="model">
-          <option value="HuggingFaceTB/SmolLM2-135M-Instruct">SmolLM2-135M-Instruct (~120 MB)</option>
-          <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2-360M-Instruct (~280 MB)</option>
-          <option value="onnx-community/Qwen3-0.6B-ONNX" selected>Qwen3-0.6B (~500 MB)</option>
-          <option value="onnx-community/Qwen3-4B-ONNX">Qwen3-4B (~2.8 GB)</option>
+          <option value="HuggingFaceTB/SmolLM2-135M-Instruct">SmolLM2-135M-Instruct</option>
+          <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2-360M-Instruct</option>
+          <option value="onnx-community/Qwen3-0.6B-ONNX" selected>Qwen3-0.6B</option>
+          <option value="onnx-community/Qwen3-4B-ONNX">Qwen3-4B (~2.8 GB, WebGPU only)</option>
         </select>
         <div class="model-status">
           <span id="status-text">Initialising…</span>
           <span id="backend-badge" class="backend-badge" hidden></span>
         </div>
         <div class="progress" id="progress" hidden><div class="progress-fill" id="progress-fill"></div></div>
+        <p class="status-note" id="status-note" hidden></p>
+        <details class="diagnostics" id="diagnostics" hidden>
+          <summary>Diagnostics</summary>
+          <div class="diag-actions"><button type="button" id="copy-diag" class="btn secondary small">Copy diagnostics</button></div>
+          <pre id="diag-text"></pre>
+        </details>
       </div>
 
       <div class="field">
@@ -69,7 +75,7 @@
           </div>
           <div class="param" data-param="topK">
             <label for="topK">top-k <span class="tip" tabindex="0" data-tip="keep only the k most likely tokens · 0 = off">?</span></label>
-            <input type="number" id="topK" min="0" max="1000" step="1" value="0" />
+            <input type="number" id="topK" min="0" max="1000" step="1" value="200" />
           </div>
           <div class="param" data-param="topP">
             <label for="topP">top-p <span class="tip" tabindex="0" data-tip="nucleus sampling · 1 = off · applied after the watermark">?</span></label>
@@ -163,6 +169,6 @@
     </section>
   </main>
 
-  <script type="module" src="main.js?v=8"></script>
+  <script type="module" src="main.js?v=9"></script>
 </body>
 </html>
