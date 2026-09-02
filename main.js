@@ -82,7 +82,6 @@ const forcedDtype = DTYPES.includes(params.get("dtype")) ? params.get("dtype") :
 // ?debug=1 always shows the diagnostics panel and mirrors worker messages to the console
 const DEBUG = params.has("debug");
 
-const COMMUNITY_URL = "https://huggingface.co/spaces/nohypeai/watermarking-playground/discussions";
 const LOAD_PHASES = new Set(["starting", "backend", "download", "compile"]);
 const PHASE_TEXT = {
   starting: "starting the inference runtime",
@@ -187,17 +186,9 @@ function setStatus(text, level = "info") {
   els.statusText.classList.toggle("status-warn", level === "warn");
 }
 
-/** Secondary line under the status; `withLink` appends the "post diagnostics" pointer. */
-function showNote(text, withLink = false) {
+/** Secondary line under the status (advice, retry explanation). */
+function showNote(text) {
   els.statusNote.textContent = text;
-  if (text && withLink) {
-    const a = document.createElement("a");
-    a.href = COMMUNITY_URL;
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.textContent = "Community tab";
-    els.statusNote.append(" Still stuck? Copy the diagnostics below and post them in the Space's ", a, ".");
-  }
   els.statusNote.hidden = !text;
 }
 
@@ -432,7 +423,7 @@ async function handleFailure(f) {
       console.error("[watermarking-playground] diagnostics failed", err);
     }
     setStatus(describeFailure(failure, report), "error");
-    showNote(adviceFor(failure, report), true);
+    showNote(adviceFor(failure, report));
     if (report) showDiagnostics(report);
     console.error("[watermarking-playground] load failed", report ?? failure);
     return;
