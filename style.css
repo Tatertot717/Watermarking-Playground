@@ -247,6 +247,14 @@ input:disabled { opacity: 0.45; cursor: not-allowed; }
 .output-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .output-head h2 { font-family: var(--font-display); font-size: 17px; margin: 0 0 12px; }
 
+.output-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 15px;
+  margin-left: auto;
+}
+
 .legend { display: flex; gap: 14px; font-size: 12.5px; color: var(--text-muted); }
 .legend-item { display: inline-flex; align-items: center; gap: 5px; }
 .swatch { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
@@ -332,3 +340,75 @@ input:disabled { opacity: 0.45; cursor: not-allowed; }
   padding: 8px 10px; margin: 0;
 }
 .btn.small { padding: 5px 12px; font-size: 12.5px; border-radius: 8px; }
+
+
+
+/* ── Editable Output ── */
+
+.editable-output {
+  display: block;
+  width: 100%;
+
+  /* Match the output box */
+  min-height: 200px;
+  max-height: calc(100vh - 210px);
+
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 2;
+
+  color: var(--text);
+  background: var(--surface-2);
+
+  border: 1px solid var(--border);
+  border-radius: 10px;
+
+  padding: 16px;
+
+  /* Let the browser show a scrollbar once max-height is reached */
+  overflow-y: auto;
+
+  /* Keep long text from breaking the layout */
+  overflow-wrap: anywhere;
+
+  /* User can manually resize vertically too */
+  resize: vertical;
+
+  transition:
+  border-color 0.15s,
+  box-shadow 0.15s;
+}
+
+.editable-output:focus {
+  outline: none;
+  border-color: var(--green);
+
+  box-shadow: 0 0 0 3px color-mix(
+    in srgb,
+    var(--green) 18%,
+                                  transparent
+  );
+}
+
+/* ── Output Edit Button ── */
+
+#edit-output-btn {
+min-width: 58px;
+}
+
+#edit-output-btn:hover:not(:disabled) {
+background: var(--green-bg);
+border-color: var(--green-border);
+color: var(--green);
+}
+
+#edit-output-btn:focus-visible {
+outline: none;
+border-color: var(--green);
+box-shadow: 0 0 0 3px color-mix(
+  in srgb,
+  var(--green) 18%,
+                                transparent
+);
+}
+

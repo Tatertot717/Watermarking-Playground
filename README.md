@@ -2,7 +2,7 @@
 
 A fork of the original nohypeai watermarking playground, designed for experimenting with AI content watermarking techniques.
 
-This playground is ready to use directly on GitHub Pages, go to [this page]().
+This playground is ready to use directly on GitHub Pages, go to [this page](https://tatertot717.github.io/Watermarking-Playground/).
 
 ## Features
 *   Visualize how digital watermarks are applied to generated media.

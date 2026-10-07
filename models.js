@@ -28,12 +28,6 @@ export const MODELS = [
     name: "Qwen3-0.6B",
     sizesMB: { q4f16: 570, q4: 919, q8: 618, fp16: 1203, fp32: 2405 },
   },
-  {
-    id: "onnx-community/Qwen3-4B-ONNX",
-    name: "Qwen3-4B",
-    sizesMB: { q4f16: 2773, fp16: 8056 },
-    webgpuOnly: true, // its 4-bit weights alone exceed what the 32-bit WASM heap can hold
-  },
 ];
 
 /** Models whose weights exceed what the 32-bit WASM backend can hold. */

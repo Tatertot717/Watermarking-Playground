@@ -24,10 +24,10 @@
       <div class="field">
         <label for="model">Model</label>
         <select id="model">
-          <option value="HuggingFaceTB/SmolLM2-135M-Instruct">SmolLM2-135M-Instruct</option>
+          <option value="HuggingFaceTB/SmolLM2-135M-Instruct" selected>SmolLM2-135M-Instruct</option>
           <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2-360M-Instruct</option>
-          <option value="onnx-community/Qwen3-0.6B-ONNX" selected>Qwen3-0.6B</option>
-          <option value="onnx-community/Qwen3-4B-ONNX">Qwen3-4B (~2.8 GB, WebGPU only)</option>
+          <option value="onnx-community/Qwen3-0.6B-ONNX">Qwen3-0.6B</option>
+          <!-- <option value="onnx-community/Qwen3-4B-ONNX">Qwen3-4B (~2.8 GB, WebGPU only)</option> -->
         </select>
         <div class="model-status">
           <span id="status-text">Initialising…</span>
@@ -58,7 +58,7 @@
           <label><input type="radio" name="wmMode" value="none" checked /><span>None</span></label>
           <label><input type="radio" name="wmMode" value="hard" /><span>Hard</span></label>
           <label><input type="radio" name="wmMode" value="soft" /><span>Soft</span></label>
-          <label><input type="radio" name="wmMode" value="tournament" /><span>Tournament</span></label>
+          <!--<label><input type="radio" name="wmMode" value="tournament" /><span>Tournament</span></label>-->
         </div>
       </div>
 
@@ -126,15 +126,33 @@
 
     <!-- ═══════════ Output ═══════════ -->
     <section class="card output-card">
-      <div class="output-head">
-        <h2>Output</h2>
-        <div class="legend" id="legend" hidden>
-          <span class="legend-item"><span class="swatch green"></span><span id="legend-hi">green list</span></span>
-          <span class="legend-item"><span class="swatch red"></span><span id="legend-lo">red list</span></span>
+        <div class="output-head">
+            <h2>Output</h2>
+
+            <div class="output-actions">
+                <div class="legend" id="legend" hidden>
+                    <span class="legend-item">
+                        <span class="swatch green"></span>
+                        <span id="legend-hi">green list</span>
+                    </span>
+                    <span class="legend-item">
+                        <span class="swatch red"></span>
+                        <span id="legend-lo">red list</span>
+                    </span>
+                </div>
+                <button id="edit-output-btn" class="btn secondary small" type="button">Edit</button>
+            </div>
         </div>
-      </div>
 
       <div class="output" id="output"><span class="placeholder" id="output-placeholder">Generated text will appear here.</span><span class="prompt-echo" id="prompt-echo"></span><span class="tokens" id="tokens"></span></div>
+      <textarea
+        id="editable-output"
+        class="editable-output"
+        spellcheck="false"
+        hidden
+        aria-label="Editable generated output"
+       ></textarea>
+
     </section>
 
     <!-- ═══════════ Detection ═══════════ -->

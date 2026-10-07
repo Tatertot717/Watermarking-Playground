@@ -414,6 +414,56 @@ async function generate(p) {
   }
 }
 
+async function retokenize(text) {
+  if (!tokenizer) {
+    post({
+      type: "error",
+      phase: "retokenize",
+      kind: "other",
+      raw: "Tokenizer is not loaded yet.",
+      modelId,
+      device,
+      dtype,
+      log: log.entries()
+    });
+    return;
+  }
+
+  setPhase("retokenize");
+
+  try {
+    const encoded = tokenizer.encode(text, {
+      add_special_tokens: false
+    });
+
+    const ids = stripTrailingSpecial(encoded.map(Number));
+
+    // Replace the previous generated sequence.
+    // This makes the edited text the new input for Detect.
+    lastGen = {
+      ids,
+      promptLen: 0
+    };
+
+    const tokens = ids.map((id) => ({
+      id,
+      text: tokenizer.decode(
+        [id],
+        { skip_special_tokens: false }
+      )
+    }));
+
+    post({
+      type: "retokenized",
+      tokens
+    });
+  } catch (err) {
+    fail("retokenize", err);
+  } finally {
+    setPhase("ready");
+  }
+}
+
 function runDetect(p) {
   if (!lastGen) {
     post({ type: "error", phase: "detect", kind: "other", raw: "Nothing to detect yet. Generate some text first.", modelId, device, dtype, log: log.entries() });
@@ -482,6 +532,10 @@ self.onmessage = async (e) => {
     case "interrupt":
       stoppingCriteria.interrupt();
       break;
+    case "retokenize":
+      await retokenize(msg.text);
+      break;
+
   }
 };
 

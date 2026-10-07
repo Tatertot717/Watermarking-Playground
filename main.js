@@ -72,6 +72,7 @@ let modelReady = false;
 let generating = false;
 let haveGeneration = false;
 let streamSpan = null;
+let currentOutputText = "";
 
 /* ── URL overrides (debugging / perf comparison) ── */
 const params = new URLSearchParams(location.search);
@@ -330,6 +331,7 @@ function handleMessage(msg) {
         span.title = `token id ${tok.id}`;
         els.tokens.appendChild(span);
       }
+      currentOutputText = msg.tokens.map(tok => tok.text).join("");
       haveGeneration = msg.tokens.length > 0;
       setStatus(msg.interrupted ? "Generation stopped." : "Done. Try the detector.");
       updateButtons();
@@ -352,6 +354,34 @@ function handleMessage(msg) {
       els.legendLo.textContent = tournament ? "g-value < 0.5" : "red list";
       els.legend.hidden = false;
       renderVerdict(msg);
+      break;
+    }
+    case "retokenized": {
+      els.tokens.innerHTML = "";
+
+      for (const tok of msg.tokens) {
+        const span = document.createElement("span");
+
+        span.className = "tok";
+        span.textContent = tok.text;
+        span.title = `token id ${tok.id}`;
+
+        els.tokens.appendChild(span);
+      }
+
+      currentOutputText =
+      msg.tokens.map(tok => tok.text).join("");
+
+      haveGeneration = msg.tokens.length > 0;
+
+      // Remove the OLD detection result.
+      els.legend.hidden = true;
+      els.verdict.hidden = true;
+
+      setStatus("Text re-tokenized. Click Detect to analyze it.");
+
+      updateButtons();
+
       break;
     }
 
@@ -695,3 +725,64 @@ refreshModelOptions(lastBackend);
 els.statusText.title = `build ${APP_VERSION}`;
 updateButtons();
 startLoad({ modelId: els.model.value, device: forcedDevice, dtype: forcedDtype });
+
+/* --editor -- */
+
+const editOutputBtn = document.getElementById("edit-output-btn");
+const editableOutput = document.getElementById("editable-output");
+const output = document.getElementById("output");
+
+let outputEditing = false;
+
+editOutputBtn.addEventListener("click", () => {
+
+  // -------------------------
+  // EDIT
+  // -------------------------
+  if (!outputEditing) {
+
+    editableOutput.value = currentOutputText;
+
+    output.hidden = true;
+    editableOutput.hidden = false;
+
+    editableOutput.focus();
+
+    editOutputBtn.textContent = "Done";
+    outputEditing = true;
+
+    return;
+  }
+
+  // -------------------------
+  // DONE
+  // -------------------------
+
+  const editedText = editableOutput.value;
+
+  currentOutputText = editedText;
+
+  // Immediately remove the old highlighted tokens.
+  els.tokens.innerHTML = "";
+
+  // Remove old detection result.
+  els.legend.hidden = true;
+  els.verdict.hidden = true;
+
+  // Temporarily show the edited text while worker retokenizes it.
+  els.tokens.textContent = editedText;
+
+  editableOutput.hidden = true;
+  output.hidden = false;
+
+  editOutputBtn.textContent = "Edit";
+  outputEditing = false;
+
+  // Ask worker to tokenize the edited text.
+  send({
+    type: "retokenize",
+    text: editedText
+  });
+
+  setStatus("Re-tokenizing edited text…");
+});
